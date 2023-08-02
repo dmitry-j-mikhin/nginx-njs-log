@@ -3,13 +3,14 @@
 This is example [docker image](https://hub.docker.com/r/dmikhin/nginx-njs-log) based on official
 [nginx:1.24.0](https://hub.docker.com/layers/library/nginx/1.24.0/images/sha256-ce340e77bc930ee76c11741d9b4764b65fa9ab25f1a7e181e824fceceb3a6ca7?context=explore)
 stable image with support of full request(headers+body) and response(headers+body) logging using [njs](https://nginx.org/en/docs/njs/).
+Also [WMX module](https://webmonitorx.ru/) is integrated for WAF protection.
 For more details check:
 * [scripts/logging.js](scripts/logging.js)
 * [scripts/default_addon.conf](scripts/default_addon.conf)
 
 Image can be executed with [run.sh](run.sh) script:
 ```Shell
-$ ./run.sh
+$ WALLARM_API_TOKEN='<Your WMX Token>' ./run.sh
 ```
 Send example request:
 ```Shell
@@ -50,7 +51,7 @@ $ docker logs -n 1 nginx | jq
 ```
 Also logs can be sent to [external syslog server](http://nginx.org/en/docs/syslog.html):
 ```Shell
-$ SYSLOG_SRV="syslog:server=172.17.0.1:5514,facility=local7,tag=nginx,severity=info" ./run.sh
+$ SYSLOG_SRV="syslog:server=172.17.0.1:5514,facility=local7,tag=nginx,severity=info" WALLARM_API_TOKEN='<Your WMX Token>' ./run.sh
 ```
 Syslog output using [syslog2stdout](https://github.com/ossobv/syslog2stdout):
 ```Shell
