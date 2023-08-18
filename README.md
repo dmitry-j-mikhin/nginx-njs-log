@@ -17,7 +17,7 @@ $ curl 127.0.0.1 -d "example request body payload"
 ```
 Latest log record formatted with [jq](https://github.com/jqlang/jq):
 ```JSON
-$ docker logs -n 1 nginx | jq
+$ docker logs -n 1 nginx-njs-log | jq
 {
   "source": "nginx",
   "msec": 1690974762.229,
