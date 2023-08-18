@@ -10,16 +10,17 @@ function request_body(r) {
     try {
       return JSON.stringify(require('fs').readFileSync(r.variables.request_body_file, 'utf8'))
     } catch(e) {
-      return null
+      return JSON.stringify("")
     }
+}
+
+function response_body(r) {
+  return JSON.stringify(r.variables.response_body_raw)
 }
 
 function response_filter(r, data, flags) {
-    r.variables.response_body_njs += data
-    if (flags.last) {
-      r.variables.response_body_njs = JSON.stringify(r.variables.response_body_njs)
-    }
+    r.variables.response_body_raw += data
     r.sendBuffer(data, flags)
 }
 
-export default {request_headers, response_headers, request_body, response_filter}
+export default {request_headers, response_headers, request_body, response_body, response_filter}
