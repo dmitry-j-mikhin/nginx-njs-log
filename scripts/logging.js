@@ -14,12 +14,13 @@ function request_body(r) {
     }
 }
 
+var response_body_arr = new Array()
 function response_body(r) {
-  return JSON.stringify(r.variables.response_body_raw)
+  return JSON.stringify(response_body_arr.join(''))
 }
 
 function response_filter(r, data, flags) {
-    r.variables.response_body_raw += data
+    response_body_arr.push(data)
     r.sendBuffer(data, flags)
 }
 
