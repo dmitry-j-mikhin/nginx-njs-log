@@ -1,12 +1,9 @@
 set -ex
 
-curl https://meganode.webmonitorx.ru/4.6/wallarm-4.6.13.x86_64-glibc.sh -O
-sh ./wallarm-4.6.13.x86_64-glibc.sh -- -b --skip-registration --skip-systemd
-rm wallarm-4.6.13.x86_64-glibc.sh
-find /opt/wallarm/modules \
-    ! -wholename '/opt/wallarm/modules/stable-1240/*' \
-    \( -type f -o -type l \) -delete
-find /opt/wallarm/modules -empty -type d -delete
+f=wallarm-4.6.14.x86_64-glibc.sh
+curl https://meganode.webmonitorx.ru/4.6/${f} -O
+sh ./${f} -- -b --skip-registration --skip-systemd
+rm ${f}
 
 sed -i \
  -e '/^events {/i load_module modules/ngx_http_js_module.so;' \
@@ -34,8 +31,8 @@ sed -i \
  fi\
  /opt/wallarm/register-node $args\
  /opt/wallarm/supervisord.sh &\
- /wait-for-it.sh -t 60 127.0.0.1:3313' \
+ /wait-for-tarantool.sh' \
  docker-entrypoint.sh
 
-cp /tmp/build/wait-for-it.sh /
+cp /tmp/build/wait-for-tarantool.sh /
 cp /tmp/build/logging.js /etc/nginx/
