@@ -20,7 +20,7 @@ function response_body(r) {
 }
 
 function response_filter(r, data, flags) {
-    response_body_arr.push(data)
+    response_body_arr.push(data.toString())
     r.sendBuffer(data, flags)
 }
 

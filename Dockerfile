@@ -1,5 +1,4 @@
-# syntax=docker/dockerfile:experimental
-FROM nginx:1.24.0
+FROM nginx:1.26.2
 
 LABEL maintainer="Dmitry Mikhin <dmikhin@webmonitorx.ru>"
 

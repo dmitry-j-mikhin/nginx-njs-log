@@ -1,5 +1,5 @@
 set -ex
 
-DOCKER_BUILDKIT=1 docker build --pull \
+docker build --pull --no-cache \
  --tag dmikhin/nginx-njs-log:latest .
 docker push dmikhin/nginx-njs-log:latest
