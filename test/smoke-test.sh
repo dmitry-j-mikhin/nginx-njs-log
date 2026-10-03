@@ -124,8 +124,8 @@ start
 curl -s -o /dev/null "$URL/?case=get"
 curl -s -o /dev/null "$URL/?case=post" -d 'example request body payload'
 curl -s -o /dev/null "$URL/?case=inject" -H 'User-Agent: a", "injected": "1'
-curl -s -o /dev/null "$URL/?case=redact" -H 'Authorization: Bearer secret' -H 'Cookie: sid=secret' \
-    -H 'X-Custom: visible'
+curl -s -o /dev/null "$URL/?case=headers" -H 'Authorization: Bearer secret' -H 'Cookie: sid=secret'
+curl -s -o /dev/null "$URL/?case=gzip" -H 'Accept-Encoding: gzip'
 curl -s -o /dev/null "$URL/?case=small-binary" --data-binary @"$WORK/small.bin"
 curl -s -o /dev/null "$URL/?case=file-body" --data-binary @"$WORK/40k.txt"
 curl -s -o /dev/null "$URL/?case=big-body" --data-binary @"$WORK/100k.txt"
@@ -139,7 +139,7 @@ printf 'GET /?case=invalid HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\nContent-L
 cat <&3 >/dev/null
 exec 3<&-
 
-wait_records 11
+wait_records 12
 
 if access_log | jq -e . >/dev/null; then
     echo "ok   every access log line is valid JSON"
@@ -160,9 +160,11 @@ check "POST: request body" post \
      and (.response_body_njs | contains("405 Not Allowed"))'
 check "JSON injection via User-Agent is escaped" inject \
     '.http_user_agent == "a\", \"injected\": \"1" and (has("injected") | not)'
-check "credential headers are redacted" redact \
-    '.request_headers_njs.Authorization == "[redacted]" and .request_headers_njs.Cookie == "[redacted]"
-     and .request_headers_njs["X-Custom"] == "visible"'
+check "headers are not masked by default" headers \
+    '.request_headers_njs.Authorization == "Bearer secret" and .request_headers_njs.Cookie == "sid=secret"'
+check "Accept-Encoding is passed upstream by default" gzip \
+    '.response_headers_njs["Content-Encoding"] == "gzip" and .response_body_njs_base64 == true
+     and (.response_body_njs | startswith("H4sI"))'
 check "binary request body is base64" small-binary \
     '.request_body_njs_base64 == true and (has("request_body_njs_truncated") | not)'
 check_bytes "binary request body content" small-binary request_body_njs "$WORK/small.bin"
@@ -192,15 +194,36 @@ check "invalid request is still logged as valid JSON" invalid \
 check_error_log
 
 echo "# settings from the environment"
-start --env NJS_LOG_BODY_MAX_SIZE=16 --env NJS_LOG_REDACT_HEADERS=""
+start --env NJS_LOG_BODY_MAX_SIZE=16 --env NJS_LOG_STRIP_ACCEPT_ENCODING=on \
+    --env NJS_LOG_REDACT=on --env NJS_LOG_REDACT_HEADERS="cookie, x-api-*" --env NJS_LOG_REDACT_VALUE="***"
 
-curl -s -o /dev/null "$URL/?case=env" -H 'Cookie: sid=visible' -d 'example request body payload'
+curl -s -o /dev/null "$URL/?case=env" -d 'example request body payload' \
+    -H 'Cookie: sid=secret' -H 'X-Api-Key: secret' -H 'Authorization: Bearer visible'
+curl -s -o /dev/null "$URL/?case=env-gzip" -H 'Accept-Encoding: gzip'
+wait_records 2
+
+check "NJS_LOG_BODY_MAX_SIZE" env \
+    '.request_body_njs == "example request " and .request_body_njs_truncated == true
+     and (.response_body_njs | length) == 16 and .response_body_njs_truncated == true'
+check "NJS_LOG_REDACT_HEADERS with a wildcard and NJS_LOG_REDACT_VALUE" env \
+    '.request_headers_njs.Cookie == "***" and .request_headers_njs["X-Api-Key"] == "***"
+     and .request_headers_njs.Authorization == "Bearer visible"'
+check "NJS_LOG_STRIP_ACCEPT_ENCODING=on" env-gzip \
+    '.request_headers_njs["Accept-Encoding"] == "gzip" and (.response_headers_njs | has("Content-Encoding") | not)
+     and .response_body_njs == "<!DOCTYPE html>\n" and (has("response_body_njs_base64") | not)'
+
+check_error_log
+
+echo "# masking with the default header list"
+start --env NJS_LOG_REDACT=on
+
+curl -s -o /dev/null "$URL/?case=redact" -H 'Authorization: Bearer secret' -H 'Cookie: sid=secret' \
+    -H 'Proxy-Authorization: Basic c2VjcmV0' -H 'X-Custom: visible'
 wait_records 1
 
-check "NJS_LOG_BODY_MAX_SIZE and NJS_LOG_REDACT_HEADERS" env \
-    '.request_body_njs == "example request " and .request_body_njs_truncated == true
-     and (.response_body_njs | length) == 16 and .response_body_njs_truncated == true
-     and .request_headers_njs.Cookie == "sid=visible"'
+check "NJS_LOG_REDACT=on" redact \
+    '.request_headers_njs.Authorization == "[redacted]" and .request_headers_njs.Cookie == "[redacted]"
+     and .request_headers_njs["Proxy-Authorization"] == "[redacted]" and .request_headers_njs["X-Custom"] == "visible"'
 
 check_error_log
 
@@ -212,7 +235,7 @@ start --env NJS_LOG_ACCESS_LOG= --env SYSLOG_SRV=syslog:server=127.0.0.1:5514
 if docker exec "$NAME" cat /etc/nginx/conf.d/njs-log.conf \
         | grep -qF 'access_log syslog:server=127.0.0.1:5514 njs_json;' \
    && docker exec "$NAME" cat /etc/nginx/conf.d/njs-log.conf \
-        | grep -qF 'js_var $njs_log_body_max_size  "16k";'; then
+        | grep -qE 'js_var +\$njs_log_body_max_size +"16k";'; then
     echo "ok   SYSLOG_SRV sets the log destination and a 16k body limit"
 else
     echo "FAIL SYSLOG_SRV"

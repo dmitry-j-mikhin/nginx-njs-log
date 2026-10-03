@@ -18,10 +18,10 @@ breaks, what the alternatives are, and why nginx core still has nothing comparab
 > | 2.3 no size cap | fixed: `NJS_LOG_BODY_MAX_SIZE` (64k) per body with a `_truncated` marker, `0` turns capture off, overridable per location |
 > | 2.4 syslog | corrected below; the default body limit is 16k when logging to syslog |
 > | 2.5 blocking disk I/O | fixed: `client_body_in_file_only` and `readFileSync` are gone, the body is read by `js_access` + `r.readRequestArrayBuffer()` |
-> | 2.6 compressed responses | fixed: `Accept-Encoding` is removed from proxied requests |
+> | 2.6 compressed responses | optional: `NJS_LOG_STRIP_ACCEPT_ENCODING=on` removes `Accept-Encoding` from proxied requests; off by default |
 > | 2.7 zero-copy | inherent to body capture, unchanged |
 > | 2.8 module-level state | fixed: state is owned by the request and dropped after logging; this mattered for QuickJS |
-> | 2.9 privacy | partly: `Authorization`, `Proxy-Authorization`, `Cookie` and `Set-Cookie` are redacted by default; bodies are not masked |
+> | 2.9 privacy | partly: optional header masking (`NJS_LOG_REDACT=on`, configurable names with `*` and replacement text); bodies are not masked |
 
 ---
 

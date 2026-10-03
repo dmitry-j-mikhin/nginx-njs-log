@@ -8,7 +8,9 @@
  * Configuration contract, see nginx/templates/njs-log.conf.template:
  *
  *   js_var $njs_log_body_max_size 64k;      bytes kept per body, 0 disables
- *   js_var $njs_log_redact_headers "...";   header names whose values are hidden
+ *   js_var $njs_log_redact off;             on: mask the headers below
+ *   js_var $njs_log_redact_headers "...";   header names, "*" matches any part
+ *   js_var $njs_log_redact_value "...";     text logged instead of their values
  *   js_set $njs_log_record logging.record;
  *   log_format njs_json escape=none $njs_log_record;
  *
@@ -27,7 +29,7 @@
 
 const DEFAULT_BODY_MAX_SIZE = 64 * 1024;
 const DEFAULT_REDACT_HEADERS = 'authorization proxy-authorization cookie set-cookie';
-const REDACTED = '[redacted]';
+const DEFAULT_REDACT_VALUE = '[redacted]';
 
 /* nginx variables copied into every record, in output order. */
 const VARIABLES = [
@@ -79,21 +81,42 @@ function bodyMaxSize(r) {
     return Number(m[1]) * (unit === 'k' ? 1024 : unit === 'm' ? 1024 * 1024 : 1);
 }
 
-function redactedHeaders(r) {
+function isOn(value) {
+    return /^\s*(on|yes|true|1)\s*$/i.test(value || '');
+}
+
+/*
+ * Header masking settings, or null when masking is off.  Header names are
+ * matched case-insensitively, "*" matches any sequence of characters.
+ */
+function redaction(r) {
+    if (!isOn(r.variables.njs_log_redact)) {
+        return null;
+    }
+
     let names = r.variables.njs_log_redact_headers;
-    const set = {};
+    let value = r.variables.njs_log_redact_value;
 
     if (names === undefined) {
         names = DEFAULT_REDACT_HEADERS;
     }
 
-    names.toLowerCase().split(/[\s,]+/).forEach(function(name) {
-        if (name) {
-            set[name] = true;
-        }
+    if (value === undefined) {
+        value = DEFAULT_REDACT_VALUE;
+    }
+
+    const patterns = names.split(/[\s,]+/).filter(function(name) {
+        return name !== '';
+
+    }).map(function(name) {
+        return name.replace(/[.+?^$|()[\]{}\\]/g, '\\$&').replace(/\*/g, '.*');
     });
 
-    return set;
+    if (patterns.length === 0) {
+        return null;
+    }
+
+    return {names: new RegExp(`^(?:${patterns.join('|')})$`, 'i'), value: value};
 }
 
 function state(r) {
@@ -230,7 +253,7 @@ function copyHeaders(headers, redact) {
     const out = {};
 
     Object.keys(headers).forEach(function(name) {
-        out[name] = redact[name.toLowerCase()] ? REDACTED : headers[name];
+        out[name] = redact !== null && redact.names.test(name) ? redact.value : headers[name];
     });
 
     return out;
@@ -245,7 +268,7 @@ function record(r) {
 
     try {
         const limit = bodyMaxSize(r);
-        const redact = redactedHeaders(r);
+        const redact = redaction(r);
 
         VARIABLES.forEach(function(v) {
             rec[v[0]] = v[1](r.variables[v[0]]);

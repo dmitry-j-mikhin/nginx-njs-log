@@ -8,10 +8,21 @@ js_engine ${NJS_LOG_JS_ENGINE};
 js_path   /etc/nginx/njs;
 js_import logging.js;
 
-# Settings read by logging.js.  Override per server or location with "set",
-# e.g. "set $njs_log_body_max_size 0;" to stop capturing bodies there.
-js_var $njs_log_body_max_size  "${NJS_LOG_BODY_MAX_SIZE}";
-js_var $njs_log_redact_headers "${NJS_LOG_REDACT_HEADERS}";
+# Settings, see README.md.  Override per server or location with "set", e.g.
+# "set $njs_log_body_max_size 0;" to stop capturing bodies there.
+js_var $njs_log_body_max_size         "${NJS_LOG_BODY_MAX_SIZE}";
+js_var $njs_log_redact                "${NJS_LOG_REDACT}";
+js_var $njs_log_redact_headers        "${NJS_LOG_REDACT_HEADERS}";
+js_var $njs_log_redact_value          "${NJS_LOG_REDACT_VALUE}";
+js_var $njs_log_strip_accept_encoding "${NJS_LOG_STRIP_ACCEPT_ENCODING}";
+
+# Accept-Encoding passed upstream: the client's one, or none when stripping
+# is on, so that the upstream answers uncompressed and the logged body is
+# readable rather than base64-encoded gzip.
+map $njs_log_strip_accept_encoding $njs_log_accept_encoding {
+    ~*^(on|yes|true|1)$  "";
+    default              $http_accept_encoding;
+}
 
 # The whole record is built and JSON-encoded by logging.js, so escape=none
 # is safe here: no raw client-controlled value is interpolated by nginx.
@@ -35,9 +46,7 @@ server {
         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Request-ID      $request_id;
-        # Ask the upstream for an uncompressed response, so that the logged
-        # body is readable rather than base64-encoded gzip.
-        proxy_set_header Accept-Encoding   "";
+        proxy_set_header Accept-Encoding   $njs_log_accept_encoding;
 
         proxy_pass ${NJS_LOG_UPSTREAM};
     }
@@ -46,6 +55,8 @@ server {
 # Demo upstream (the default NJS_LOG_UPSTREAM): the stock nginx welcome page.
 server {
     listen 127.0.0.1:8080;
+
+    gzip on;
 
     location / {
         root   /usr/share/nginx/html;

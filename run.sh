@@ -14,7 +14,10 @@ docker run -it --rm \
  -e NJS_LOG_UPSTREAM \
  -e NJS_LOG_ACCESS_LOG \
  -e NJS_LOG_BODY_MAX_SIZE \
+ -e NJS_LOG_REDACT \
  -e NJS_LOG_REDACT_HEADERS \
+ -e NJS_LOG_REDACT_VALUE \
+ -e NJS_LOG_STRIP_ACCEPT_ENCODING \
  -e NJS_LOG_JS_ENGINE \
  -p "${PORT:-80}:80" \
  "${IMAGE:-dmikhin/nginx-njs-log:latest}"

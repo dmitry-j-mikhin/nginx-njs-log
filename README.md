@@ -71,7 +71,8 @@ $ docker run --rm -p 80:80 -e NJS_LOG_UPSTREAM=http://app:3000 --network my-net 
   marked with `"request_body_njs_base64": true` / `"response_body_njs_base64": true`.
 * Bodies longer than `NJS_LOG_BODY_MAX_SIZE` are cut and marked with `"..._truncated": true`.
   A UTF-8 character split by the cut is dropped.
-* Values of the headers listed in `NJS_LOG_REDACT_HEADERS` are replaced with `"[redacted]"`.
+* With `NJS_LOG_REDACT=on`, values of the headers matching `NJS_LOG_REDACT_HEADERS` are replaced with
+  `NJS_LOG_REDACT_VALUE`, see [Header masking](#header-masking).
 * If building a record fails, it still is valid JSON and carries an `njs_log_error` field.
 
 ## Settings
@@ -82,20 +83,57 @@ $ docker run --rm -p 80:80 -e NJS_LOG_UPSTREAM=http://app:3000 --network my-net 
 | `NJS_LOG_ACCESS_LOG` | `/var/log/nginx/access.log` (stdout) or `$SYSLOG_SRV` | log destination, a file or an [nginx syslog target](https://nginx.org/en/docs/syslog.html) |
 | `SYSLOG_SRV` | | shortcut for a syslog `NJS_LOG_ACCESS_LOG`, kept for compatibility |
 | `NJS_LOG_BODY_MAX_SIZE` | `64k`, `16k` with syslog | bytes kept per body (`k`/`m` suffixes allowed), `0` turns body capture off |
-| `NJS_LOG_REDACT_HEADERS` | `authorization proxy-authorization cookie set-cookie` | request and response headers to hide; empty to log everything |
+| `NJS_LOG_REDACT` | `off` | `on` masks the values of the headers below, see [Header masking](#header-masking) |
+| `NJS_LOG_REDACT_HEADERS` | `authorization proxy-authorization cookie set-cookie` | request and response headers to mask |
+| `NJS_LOG_REDACT_VALUE` | `[redacted]` | text logged instead of a masked value (no `"` or `$`: it goes into nginx config) |
+| `NJS_LOG_STRIP_ACCEPT_ENCODING` | `off` | `on` removes `Accept-Encoding` from proxied requests, see [Compression](#compression) |
 | `NJS_LOG_JS_ENGINE` | `njs` | `js_engine`: `njs` or `qjs` (QuickJS) |
 
 The settings are applied at container start by the stock nginx image entrypoint (`envsubst` on
 `/etc/nginx/templates`, see [docker-entrypoint.d/18-njs-log.envsh](docker-entrypoint.d/18-njs-log.envsh)).
 Only `NJS_LOG_*` variables are substituted (`NGINX_ENVSUBST_FILTER`), so nginx variables in templates are left alone.
-For anything else, mount your own `/etc/nginx/templates/njs-log.conf.template`. The body limit can also be changed
-per location, e.g. to stop capturing bodies of file uploads:
+For anything else, mount your own `/etc/nginx/templates/njs-log.conf.template`.
+
+`NJS_LOG_BODY_MAX_SIZE`, `NJS_LOG_REDACT*` and `NJS_LOG_STRIP_ACCEPT_ENCODING` become the nginx variables
+`$njs_log_body_max_size`, `$njs_log_redact`, ... and can be changed per server or location with `set`:
 ```nginx
 location /upload/ {
-    set $njs_log_body_max_size 0;
+    set $njs_log_body_max_size 0;       # do not capture bodies of file uploads
+    ...
+}
+
+location /api/ {
+    set $njs_log_redact on;
+    set $njs_log_redact_headers "authorization x-api-*";
+    set $njs_log_strip_accept_encoding on;
     ...
 }
 ```
+A location of your own needs the `js_access`, `js_body_filter` and `proxy_set_header Accept-Encoding
+$njs_log_accept_encoding` lines of the `location /` from the template.
+
+### Header masking
+
+Masking is off by default: every header is logged as it is. With `NJS_LOG_REDACT=on` the values of matching
+request and response headers are replaced with `NJS_LOG_REDACT_VALUE`:
+```shell
+$ docker run --rm -p 80:80 -e NJS_LOG_REDACT=on \
+    -e NJS_LOG_REDACT_HEADERS="authorization cookie set-cookie x-api-* *-token" \
+    -e NJS_LOG_REDACT_VALUE="***" dmikhin/nginx-njs-log
+```
+`NJS_LOG_REDACT_HEADERS` is a list of header names separated by spaces or commas, matched case-insensitively;
+`*` matches any part of a name. Only headers are masked: bodies and the query string are logged as they are.
+
+### Compression
+
+By default `Accept-Encoding` is passed to the upstream unchanged. When the upstream compresses its answer, the
+logged response body is the compressed bytes in base64 and `response_headers_njs` has `Content-Encoding`.
+The demo upstream does this too, so a request from a browser is logged with a gzip body.
+
+`NJS_LOG_STRIP_ACCEPT_ENCODING=on` removes `Accept-Encoding` from proxied requests, the upstream answers
+uncompressed and the logged body is readable. Traffic between nginx and the upstream grows accordingly. To keep
+compression for clients, enable `gzip` in the logging `server`: nginx compresses the response after
+`js_body_filter` has captured it.
 
 ### Syslog
 
@@ -113,8 +151,8 @@ headers can still push a record over the limit; for complete logs prefer a file 
 
 ## Caveats
 
-* **Sensitive data.** Bodies are logged as they are: passwords, tokens and personal data in request or response
-  bodies end up in the log. Only the headers from `NJS_LOG_REDACT_HEADERS` are hidden.
+* **Sensitive data.** Nothing is masked by default: credentials and personal data in headers, bodies and the
+  query string end up in the log. `NJS_LOG_REDACT=on` masks headers only.
 * **Memory.** The whole request body is read into worker memory before it is proxied (bounded by
   `client_max_body_size`, 1m by default), and up to `NJS_LOG_BODY_MAX_SIZE` of each body is kept until the
   record is written. `proxy_request_buffering off` has no effect in a location with `js_access`.
@@ -122,8 +160,6 @@ headers can still push a record over the limit; for complete logs prefer a file 
 * **Temporary files.** A request body larger than `client_body_buffer_size` (16k) is buffered to disk by nginx
   and read back by njs, which logs `http js reading request body from a temporary file` at the `warn` level.
   Raise `client_body_buffer_size` to keep such bodies in memory.
-* **Compression.** `Accept-Encoding` is removed from proxied requests so that the upstream answers uncompressed
-  and the logged body is readable. Enable `gzip` in nginx if clients should still get compressed responses.
 * **`docker logs`.** Docker splits log lines longer than 16 KiB, and the `json-file` driver may replace
   a multi-byte UTF-8 character at a split point with `U+FFFD`. Log to a file on a volume when records are large.
 
@@ -132,7 +168,7 @@ headers can still push a record over the limit; for complete logs prefer a file 
 ## Development
 
 * `./test/smoke-test.sh` builds the image and checks the log records for a set of requests (text, binary,
-  large and invalid requests, header redaction, JSON injection); `NJS_LOG_JS_ENGINE=qjs ./test/smoke-test.sh`
+  large and invalid requests, header masking, `Accept-Encoding` handling, JSON injection); `NJS_LOG_JS_ENGINE=qjs ./test/smoke-test.sh`
   runs the same checks with QuickJS. CI runs both on every push and pull request.
 * `./build_push.sh` runs the smoke test, then builds `linux/amd64` and `linux/arm64` images and pushes them as
   `latest` and `<nginx version>`.
