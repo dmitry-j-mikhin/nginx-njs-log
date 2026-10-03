@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke-test:
+    name: smoke test (js_engine ${{ matrix.engine }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [njs, qjs]
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build image
+        run: docker build --pull --tag nginx-njs-log:test .
+
+      - name: Smoke test
+        run: ./test/smoke-test.sh nginx-njs-log:test
+        env:
+          NJS_LOG_JS_ENGINE: ${{ matrix.engine }}

@@ -1,0 +1,16 @@
+#!/bin/sh
+# Sourced by /docker-entrypoint.sh before 20-envsubst-on-templates.sh renders
+# /etc/nginx/templates/njs-log.conf.template.
+
+# Access log destination: a file, or a syslog target such as
+# "syslog:server=172.17.0.1:5514,facility=local7,tag=nginx,severity=info".
+# SYSLOG_SRV is kept for compatibility with earlier versions of the image.
+export NJS_LOG_ACCESS_LOG="${NJS_LOG_ACCESS_LOG:-${SYSLOG_SRV:-/var/log/nginx/access.log}}"
+
+# Bytes of each body kept in a record.  nginx sends a syslog record as one UDP
+# datagram and drops records that do not fit into 64 KiB, so the default is
+# smaller there: two base64-encoded 16 KiB bodies plus headers still fit.
+case "$NJS_LOG_ACCESS_LOG" in
+    syslog:*) export NJS_LOG_BODY_MAX_SIZE="${NJS_LOG_BODY_MAX_SIZE:-16k}" ;;
+    *)        export NJS_LOG_BODY_MAX_SIZE="${NJS_LOG_BODY_MAX_SIZE:-64k}" ;;
+esac

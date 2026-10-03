@@ -7,16 +7,32 @@ breaks, what the alternatives are, and why nginx core still has nothing comparab
 * Repository state: commit `bfc5ad5` (nginx `1.26.2`, njs body filter with `buffer_type=buffer`)
 * Upstream versions checked: nginx **1.31.3** (15 Jul 2026), njs **1.0.0** (23 Jun 2026)
 
+> **Update 2026-10-03.** The image has since moved to nginx **1.30.5** (stable) with njs **1.0.1**, and most
+> findings below are addressed. The rest of this document describes the reviewed commit `bfc5ad5` and is
+> kept as is, apart from the corrections marked in 2.4, 2.5 and 2.8.
+>
+> | Finding | Status |
+> |---|---|
+> | 2.1 forgeable JSON | fixed: the whole record is built by `JSON.stringify()` in njs, `log_format` holds one `js_set` variable |
+> | 2.2 binary payloads | fixed: bodies that are not valid UTF-8 are logged as base64 with a `_base64` marker |
+> | 2.3 no size cap | fixed: `NJS_LOG_BODY_MAX_SIZE` (64k) per body with a `_truncated` marker, `0` turns capture off, overridable per location |
+> | 2.4 syslog | corrected below; the default body limit is 16k when logging to syslog |
+> | 2.5 blocking disk I/O | fixed: `client_body_in_file_only` and `readFileSync` are gone, the body is read by `js_access` + `r.readRequestArrayBuffer()` |
+> | 2.6 compressed responses | optional: `NJS_LOG_STRIP_ACCEPT_ENCODING=on` removes `Accept-Encoding` from proxied requests; off by default |
+> | 2.7 zero-copy | inherent to body capture, unchanged |
+> | 2.8 module-level state | fixed: state is owned by the request and dropped after logging; this mattered for QuickJS |
+> | 2.9 privacy | partly: optional header masking (`NJS_LOG_REDACT=on`, configurable names with `*` and replacement text); bodies are not masked |
+
 ---
 
 ## 1. What this repository does
 
 Two moving parts:
 
-* [`scripts/default_addon.conf`](scripts/default_addon.conf) — a `log_format json escape=none`
+* [`scripts/default_addon.conf`](https://github.com/dmitry-j-mikhin/nginx-njs-log/blob/bfc5ad5/scripts/default_addon.conf) — a `log_format json escape=none`
   template that mixes plain nginx variables with four `js_set` variables, plus
   `client_body_in_file_only clean` and a `js_body_filter` on `location /`.
-* [`scripts/logging.js`](scripts/logging.js) — `JSON.stringify` over `r.headersIn` /
+* [`scripts/logging.js`](https://github.com/dmitry-j-mikhin/nginx-njs-log/blob/bfc5ad5/scripts/logging.js) — `JSON.stringify` over `r.headersIn` /
   `r.headersOut`, a `readFileSync` of `$request_body_file`, and a body filter that
   accumulates every response chunk into a module-level array which is joined at log time.
 
@@ -48,11 +64,11 @@ the entire log line inside njs and emit it via a single `js_set` variable.
 
 ### 2.2 Binary payloads are still corrupted — *medium*
 
-`scripts/logging.js:23` calls `data.toString()`, which decodes as UTF-8. Since njs 0.8.5,
+[`scripts/logging.js:23`](https://github.com/dmitry-j-mikhin/nginx-njs-log/blob/bfc5ad5/scripts/logging.js#L23) calls `data.toString()`, which decodes as UTF-8. Since njs 0.8.5,
 bytes that are invalid UTF-8 are replaced with U+FFFD — the replacement is lossy and
 irreversible. `buffer_type=buffer` (added in `bfc5ad5`) changed what the filter receives, not
 how it is decoded. The same applies to request bodies: `readFileSync(..., 'utf8')` at
-`scripts/logging.js:11` mangles any binary multipart upload.
+[`scripts/logging.js:11`](https://github.com/dmitry-j-mikhin/nginx-njs-log/blob/bfc5ad5/scripts/logging.js#L11) mangles any binary multipart upload.
 
 There is also a size amplification: each U+FFFD becomes a 6-character `�` escape in the
 JSON output, so a 1 MB binary response can produce several MB of log.
@@ -93,6 +109,13 @@ are cut off with no error and no marker — the record simply ends mid-string an
 valid JSON. Datagrams of that size also fragment on a typical MTU, which adds silent loss.
 The `SYSLOG_SRV` example in the README is therefore only honest for small bodies.
 
+> **Correction (2026-10-03).** The clamp above is in `ngx_syslog_writer()`, which serves
+> `error_log` only. `access_log` formats the line itself and passes it to `ngx_syslog_send()`
+> unclamped: with nginx 1.30.5 a 38 KB record arrived intact. The real limit is the UDP
+> datagram: a record over ~64 KiB is not truncated but dropped as a whole, with
+> `[alert] send() failed (90: Message too long) while logging to syslog`. The image now
+> defaults to a 16k body limit when it logs to syslog.
+
 ### 2.5 Blocking disk I/O on every request — *medium*
 
 `client_body_in_file_only clean` forces **every** request body to disk, even a 20-byte form
@@ -109,6 +132,15 @@ themselves, and since **0.9.9** there are async `r.readRequestText()` /
 base image the whole `readFileSync` + `client_body_in_file_only` construct can go away.
 Note that the njs shipped with `nginx:1.26.2` predates 0.8.10 — check the actual module
 version before relying on these.
+
+> **Correction (2026-10-03).** `r.requestText` / `r.requestBuffer` do **not** help in the log
+> phase. A temporary body file is created unlinked, and nginx closes it as soon as the body has
+> been sent upstream; reading `r.requestBuffer` from `js_set` afterwards fails with
+> `pread() ... failed (9: Bad file descriptor)` at the `crit` level. Bodies that stayed in
+> memory (up to `client_body_buffer_size`) are still readable. The working replacement is to
+> read the body earlier with `js_access` and the async `r.readRequestArrayBuffer()` (0.9.9+),
+> which is what the image does now; it costs the whole body in worker memory, bounded by
+> `client_max_body_size`.
 
 ### 2.6 Compressed upstream responses are logged as gzip bytes — *medium*
 
@@ -133,6 +165,12 @@ does, however, persist across internal redirects (`error_page`, `try_files`,
 `X-Accel-Redirect`) and subrequests within the same request, and the bodies of both passes
 are concatenated into one log field. Keeping the accumulator in `r.ctx`, or resetting it on
 the first chunk, avoids the mixing.
+
+> **Correction (2026-10-03).** "Does not leak between requests" holds for the default njs
+> engine only. With `js_engine qjs` (QuickJS, njs 0.8.6+) contexts are reused between requests
+> (`js_context_reuse`), module-level variables keep their values, and bodies of earlier requests
+> show up in later records. The smoke test reproduces this when the state reset is removed.
+> The image now ties the state to the request object and drops it once the record is written.
 
 ### 2.9 Privacy and compliance — *high, contextual*
 
