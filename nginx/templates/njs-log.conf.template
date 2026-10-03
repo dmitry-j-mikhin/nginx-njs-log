@@ -1,0 +1,54 @@
+# Full request/response logging with njs.
+#
+# ${NJS_LOG_*} placeholders are filled from the environment at container
+# start by /docker-entrypoint.d/20-envsubst-on-templates.sh; defaults are set
+# in the Dockerfile and in /docker-entrypoint.d/18-njs-log.envsh.
+
+js_engine ${NJS_LOG_JS_ENGINE};
+js_path   /etc/nginx/njs;
+js_import logging.js;
+
+# Settings read by logging.js.  Override per server or location with "set",
+# e.g. "set $njs_log_body_max_size 0;" to stop capturing bodies there.
+js_var $njs_log_body_max_size  "${NJS_LOG_BODY_MAX_SIZE}";
+js_var $njs_log_redact_headers "${NJS_LOG_REDACT_HEADERS}";
+
+# The whole record is built and JSON-encoded by logging.js, so escape=none
+# is safe here: no raw client-controlled value is interpolated by nginx.
+js_set $njs_log_record logging.record;
+log_format njs_json escape=none $njs_log_record;
+
+server {
+    listen 80;
+
+    access_log ${NJS_LOG_ACCESS_LOG} njs_json;
+
+    location / {
+        # js_access reads the whole request body before it is proxied, so
+        # "proxy_request_buffering off" has no effect here; js_body_filter
+        # sees every chunk of the response.  Both keep at most
+        # $njs_log_body_max_size bytes for the log.
+        js_access      logging.capture_request_body;
+        js_body_filter logging.capture_response_body buffer_type=buffer;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Request-ID      $request_id;
+        # Ask the upstream for an uncompressed response, so that the logged
+        # body is readable rather than base64-encoded gzip.
+        proxy_set_header Accept-Encoding   "";
+
+        proxy_pass ${NJS_LOG_UPSTREAM};
+    }
+}
+
+# Demo upstream (the default NJS_LOG_UPSTREAM): the stock nginx welcome page.
+server {
+    listen 127.0.0.1:8080;
+
+    location / {
+        root   /usr/share/nginx/html;
+        index  index.html;
+    }
+}

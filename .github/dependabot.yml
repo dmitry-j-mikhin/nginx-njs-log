@@ -1,0 +1,17 @@
+version: 2
+updates:
+  # Patch releases of the pinned stable nginx branch (1.30.x).  Moving to the
+  # next stable branch (an even minor, e.g. 1.32) is done by hand: Dependabot
+  # cannot tell stable from mainline (odd minor) versions.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: nginx
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
