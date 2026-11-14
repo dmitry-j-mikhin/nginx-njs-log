@@ -1,4 +1,4 @@
-FROM nginx:1.30.5
+FROM nginx:1.30.6
 
 LABEL org.opencontainers.image.title="nginx-njs-log" \
       org.opencontainers.image.description="nginx with full request and response (headers + body) JSON logging via njs" \
